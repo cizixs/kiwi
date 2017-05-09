@@ -3,36 +3,32 @@ from .fields import Field
 
 class ModelMetaClass(type):
     """Metaclass for Model"""
-    def __new__(cls, name, bases, attrs):
-        mapping = {}
-        for key, value in attrs.items():
-            if isinstance(value, Field):
-                mapping[key] = value
-
+    def __new__(mcs, name, bases, attrs):
+        mapping = {key: value for key, value in attrs.items()
+                   if isinstance(value, Field)}
         # remove the origin fields
         for key in mapping.keys():
             del attrs[key]
 
-        table_name = attrs.get('__tablename__', str(name).lower())
-
         real_attrs = {
             '__db_fields__': mapping,
-            '__db_tablename__': table_name,
+            '__db_tablename__': attrs.get('__tablename__', str(name).lower()),
         }
         real_attrs.update(attrs)
 
-        cls_obj = type.__new__(cls, name, bases, real_attrs)
+        cls_obj = type.__new__(mcs, name, bases, real_attrs)
         return cls_obj
 
 
 class Model(object):
+    """Base class for all models."""
     __metaclass__ = ModelMetaClass
 
     @classmethod
     def create(cls, **kwargs):
+        """Add a record in table."""
         table_name = cls.__db_tablename__
-        fields = []
-        args = []
+        fields, args = [], []
 
         for field, _ in cls.__db_fields__.items():
             fields.append(field)
@@ -41,7 +37,40 @@ class Model(object):
         sql = 'INSERT into %s (%s) VALUES (%s);' % (
             table_name, ', '.join(fields), ', '.join(['%s'] * len(fields))
         )
+        Database.execute(sql, tuple(args))
 
+    @classmethod
+    def get(cls, **kwargs):
+        """Return one record from database."""
+        table_name = cls.__db_tablename__
+        filters = 'where ' + ' and '.join([key + '=%s' for key in kwargs]) \
+            if kwargs else ''
+
+        sql = 'SELECT %s from %s %s LIMIT 1' % (
+            ' ,'.join(cls.__db_fields__.keys()), table_name, filters)
+        result = Database.execute(sql, tuple(kwargs.values()))
+        record = result.fetchone()
+        instance = cls()
+        for index, field in enumerate(record):
+            setattr(instance, cls.__db_fields__.keys()[index], field)
+        return instance
+
+    def save(self):
+        """Save current instance to database."""
+        self.__class__.create(**self.__dict__)
+
+    def delete(self):
+        """Delete current instance from database."""
+        table_name = self.__db_tablename__
+        fields, args = [], []
+        for field, _ in self.__db_fields__.items():
+            fields.append(field)
+            args.append(self.__dict__[field])
+
+        filters = ' WHERE ' + ' and '.join([key + '=%s' for key in fields]) \
+            if fields else ''
+
+        sql = 'DELETE FROM %s %s' % (table_name, filters)
         Database.execute(sql, tuple(args))
 
 
